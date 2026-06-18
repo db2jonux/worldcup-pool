@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>월드컵 스코어 맞추기 풀 · 한국 vs 멕시코</title>
+
+<!--
+====================================================================
+ 설정 방법 (한 번만 하면 됨, 컴퓨터에서 하는 걸 권장)
+====================================================================
+1) https://console.firebase.google.com 에서 프로젝트 생성 (무료)
+2) 좌측 "빌드 > Realtime Database" → "데이터베이스 만들기"
+   - 위치 선택 후 "테스트 모드로 시작" 선택 (친목용)
+3) 생성되면 상단에 데이터베이스 URL이 보여요. 예:
+   https://내프로젝트-default-rtdb.firebaseio.com
+   → 아래 CONFIG.DB_URL 에 그대로 붙여넣기
+4) Realtime Database > 규칙(Rules) 탭에서 아래로 저장(친목용 공개 규칙):
+   {
+     "rules": { ".read": true, ".write": true }
+   }
+   ※ 누구나 읽고 쓸 수 있는 규칙이라 친목용에만 쓰세요.
+5) 이 .html 파일을 어디든 올리면 끝:
+   - 가장 쉬움: https://app.netlify.com/drop 에 파일을 끌어다 놓기
+   - 또는 Firebase Hosting / Vercel / GitHub Pages
+6) 올라온 주소를 친구들에게 공유 → 모두 같은 풀을 실시간으로 봅니다.
+
+* DB_URL 을 비워두면 백엔드 없이 "이 기기 전용"으로도 동작합니다.
+====================================================================
+-->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0a0e1a; }
+  #root { min-height: 100vh; }
+  @keyframes pulse { 0%,100%{ text-shadow:0 0 18px #ffc94d44; box-shadow:0 6px 24px #ffc94d33 } 50%{ text-shadow:0 0 30px #ffc94d88; box-shadow:0 6px 30px #ffc94d66 } }
+  @keyframes popIn { 0%{ transform:scale(.3); opacity:0 } 60%{ transform:scale(1.15); opacity:1 } 100%{ transform:scale(1) } }
+  @keyframes boardIn { 0%{ transform:scale(.7) translateY(20px); opacity:0 } 100%{ transform:scale(1) translateY(0); opacity:1 } }
+  @keyframes verdictIn { 0%{ transform:translateY(16px); opacity:0 } 100%{ transform:translateY(0); opacity:1 } }
+  @keyframes drumBounce { 0%,100%{ transform:translateY(0); opacity:.4 } 50%{ transform:translateY(-12px); opacity:1 } }
+  @keyframes confettiFall { 0%{ transform:translateY(-12vh) rotate(0deg); opacity:0 } 10%{ opacity:1 } 100%{ transform:translateY(96vh) rotate(720deg); opacity:.9 } }
+  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important } }
+  button:focus-visible, input:focus-visible { outline:2px solid #ffc94d; outline-offset:2px }
+  input::placeholder{ color:#5a678a }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+
+/* ====================== CONFIG (여기를 채우세요) ====================== */
+const CONFIG = {
+  DB_URL: "",                 // 예: "https://your-project-default-rtdb.firebaseio.com"
+  POOL_ID: "korea-mexico-a2", // 풀 구분용 id (여러 경기 운영 시 바꾸면 됨)
+  ADMIN_PIN: "2026",          // 관리자 4자리 PIN
+};
+const ENTRY_FEE = 10000;
+/* ==================================================================== */
+
+const C = {
+  bg: "#0a0e1a", panel: "#121a2e", panel2: "#0e1525", line: "#22304e",
+  text: "#eef2fb", muted: "#8593b4", faint: "#5a678a",
+  gold: "#ffc94d", goldDim: "#a8842f",
+  kr: "#e23744", krBlue: "#2a5cff", mx: "#00a45a", mxRed: "#d62828",
+};
+const won = (n) => n.toLocaleString("ko-KR") + "원";
+const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+const withTimeout = (p, ms) => Promise.race([
+  Promise.resolve(p),
+  new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms)),
+]);
+
+/* ---------- 2026 월드컵 조 편성 (A~L) ---------- */
+const GROUPS = {
+  A: [["멕시코", "🇲🇽"], ["남아공", "🇿🇦"], ["대한민국", "🇰🇷"], ["체코", "🇨🇿"]],
+  B: [["캐나다", "🇨🇦"], ["보스니아", "🇧🇦"], ["카타르", "🇶🇦"], ["스위스", "🇨🇭"]],
+  C: [["브라질", "🇧🇷"], ["모로코", "🇲🇦"], ["아이티", "🇭🇹"], ["스코틀랜드", "🏴󠁧󠁢󠁳󠁣󠁴󠁿"]],
+  D: [["미국", "🇺🇸"], ["파라과이", "🇵🇾"], ["호주", "🇦🇺"], ["튀르키예", "🇹🇷"]],
+  E: [["독일", "🇩🇪"], ["쿠라소", "🇨🇼"], ["코트디부아르", "🇨🇮"], ["에콰도르", "🇪🇨"]],
+  F: [["네덜란드", "🇳🇱"], ["일본", "🇯🇵"], ["스웨덴", "🇸🇪"], ["튀니지", "🇹🇳"]],
+  G: [["벨기에", "🇧🇪"], ["이집트", "🇪🇬"], ["이란", "🇮🇷"], ["뉴질랜드", "🇳🇿"]],
+  H: [["스페인", "🇪🇸"], ["카보베르데", "🇨🇻"], ["사우디", "🇸🇦"], ["우루과이", "🇺🇾"]],
+  I: [["프랑스", "🇫🇷"], ["세네갈", "🇸🇳"], ["이라크", "🇮🇶"], ["노르웨이", "🇳🇴"]],
+  J: [["아르헨티나", "🇦🇷"], ["알제리", "🇩🇿"], ["오스트리아", "🇦🇹"], ["요르단", "🇯🇴"]],
+  K: [["포르투갈", "🇵🇹"], ["콩고DR", "🇨🇩"], ["우즈베키스탄", "🇺🇿"], ["콜롬비아", "🇨🇴"]],
+  L: [["잉글랜드", "🏴󠁧󠁢󠁥󠁮󠁧󠁿"], ["크로아티아", "🇭🇷"], ["가나", "🇬🇭"], ["파나마", "🇵🇦"]],
+};
+const GROUP_KEYS = Object.keys(GROUPS);
+const pad2 = (n) => String(n).padStart(2, "0");
+function fmtCountdown(ms) {
+  if (ms <= 0) return "00:00:00";
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return (d > 0 ? d + "일 " : "") + `${pad2(h)}:${pad2(m)}:${pad2(sec)}`;
+}
+// 베팅 마감 여부: 결과 확정 / 경기 미설정 / 수동잠금 / 킥오프 시간 초과
+function bettingClosed(match, lock, result, now) {
+  if (result) return true;
+  if (!match) return true;
+  if (lock === "open") return false;
+  if (lock === "closed") return true;
+  return now >= (match.kickoff || 0); // auto
+}
+
+/* ---------- Firebase Realtime DB (REST) ---------- */
+// 연결 정보는 URL 파라미터(?db=...&pool=...) > CONFIG 순으로 사용
+function readUrlConfig() {
+  try {
+    const p = new URLSearchParams(location.search);
+    return { db: p.get("db") || "", pool: p.get("pool") || "" };
+  } catch (_) { return { db: "", pool: "" }; }
+}
+const _u = readUrlConfig();
+const RT = {
+  dbUrl: (_u.db || CONFIG.DB_URL || "").replace(/\/$/, ""),
+  poolId: _u.pool || CONFIG.POOL_ID || "pool",
+};
+const base = () => `${RT.dbUrl}/pools/${RT.poolId}`;
+async function dbGetPool() {
+  const res = await withTimeout(fetch(`${base()}.json`), 6000);
+  if (!res.ok) {
+    let body = "";
+    try { body = (await res.text()).slice(0, 120); } catch (_) {}
+    throw new Error("HTTP " + res.status + (body ? " · " + body : ""));
+  }
+  return await res.json(); // null 또는 { bets:{id:{...}}, result:{...}, match:{...}, lock:"..." }
+}
+async function dbPut(path, value) {
+  const res = await withTimeout(fetch(`${base()}/${path}.json`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value),
+  }), 6000);
+  if (!res.ok) throw new Error("put " + res.status);
+}
+async function dbDelete(path) {
+  const url = path ? `${base()}/${path}.json` : `${base()}.json`;
+  await withTimeout(fetch(url, { method: "DELETE" }), 6000);
+}
+
+function App() {
+  const [dbUrl, setDbUrl] = useState(RT.dbUrl);
+  const [poolId, setPoolId] = useState(RT.poolId);
+  const [dbInput, setDbInput] = useState(RT.dbUrl);
+  const [shareLink, setShareLink] = useState("");
+  const [connDetail, setConnDetail] = useState("");
+  const online = !!dbUrl;
+
+  const [bets, setBets] = useState([]);
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [conn, setConn] = useState(online ? "connecting" : "local"); // connecting|live|error|local
+
+  const [name, setName] = useState("");
+  const [kr, setKr] = useState(1);
+  const [mx, setMx] = useState(1);
+  const [error, setError] = useState("");
+  const [flash, setFlash] = useState(null);
+  const [editingKey, setEditingKey] = useState(null);
+
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [rkr, setRkr] = useState(0);
+  const [rmx, setRmx] = useState(0);
+  const [unlocked, setUnlocked] = useState(false);
+  const [pinError, setPinError] = useState("");
+  const [reveal, setReveal] = useState("hidden");
+
+  // 경기 설정 / 베팅 잠금
+  const [match, setMatch] = useState(null);   // { group, home:{name,flag}, away:{name,flag}, kickoff(ms) }
+  const [lock, setLock] = useState("auto");   // auto | open | closed
+  const [now, setNow] = useState(Date.now());
+  const [setupMode, setSetupMode] = useState(false);
+  const [selGroup, setSelGroup] = useState("A");
+  const [selHome, setSelHome] = useState(0);
+  const [selAway, setSelAway] = useState(2);
+  const [selKick, setSelKick] = useState("");
+
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  function flashMsg(m) { setFlash(m); setTimeout(() => setFlash(null), 3000); }
+
+  async function loadPool() {
+    if (!online) { setConn("local"); setLoading(false); return; }
+    try {
+      const data = await dbGetPool();
+      const betsObj = (data && data.bets) || {};
+      const arr = Object.keys(betsObj).map((k) => ({ key: k, ...betsObj[k] }))
+        .sort((a, b) => (a.t || 0) - (b.t || 0));
+      setBets(arr);
+      const res = (data && data.result) || null;
+      setResult(res);
+      setReveal((r) => (res ? (r === "hidden" ? "ready" : r) : "hidden"));
+      setMatch((data && data.match) || null);
+      setLock((data && data.lock) || "auto");
+      setConn("live");
+      setConnDetail("");
+    } catch (e) {
+      setConn("error");
+      setConnDetail((e && e.message) ? String(e.message) : "알 수 없는 오류");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    RT.dbUrl = dbUrl; RT.poolId = poolId;
+    setLoading(true);
+    loadPool();
+    if (!dbUrl) return;
+    const iv = setInterval(loadPool, 4000);
+    return () => clearInterval(iv);
+  }, [dbUrl, poolId]);
+
+  // derived
+  const pot = bets.length * ENTRY_FEE;
+  const rows = useMemo(() => {
+    const g = {};
+    for (const b of bets) {
+      const k = `${b.kr}-${b.mx}`;
+      (g[k] = g[k] || { kr: b.kr, mx: b.mx, names: [] }).names.push(b.name);
+    }
+    return Object.keys(g).map((k) => g[k]).map((x) => ({
+      ...x, count: x.names.length, total: x.names.length * ENTRY_FEE,
+      pct: bets.length ? x.names.length / bets.length : 0,
+    })).sort((a, b) => b.count - a.count || a.kr - b.kr || a.mx - b.mx);
+  }, [bets]);
+  const maxCount = Math.max(1, ...rows.map((r) => r.count));
+  const winners = useMemo(
+    () => (result ? bets.filter((b) => b.kr === result.kr && b.mx === result.mx) : []),
+    [bets, result]
+  );
+  const payout = winners.length ? Math.floor(pot / winners.length) : 0;
+  const editing = !!editingKey;
+  const closed = bettingClosed(match, lock, result, now);
+  const msToKick = match ? (match.kickoff || 0) - now : 0;
+
+  // actions
+  async function submitBet() {
+    setError("");
+    if (closed) { setError("베팅이 마감되었습니다."); return; }
+    const nm = name.trim();
+    if (!nm) { setError("이름을 입력해 주세요."); return; }
+    const id = editingKey || ("b_" + uid());
+    const entry = { name: nm, kr, mx, t: editingKey ? (bets.find((b) => b.key === id)?.t || Date.now()) : Date.now() };
+    setBets((prev) => editingKey ? prev.map((b) => (b.key === id ? { ...b, ...entry } : b)) : [...prev, { key: id, ...entry }]);
+    setEditingKey(null); setName("");
+    flashMsg(editingKey ? `수정 완료 · ${nm} · ${kr} : ${mx}` : `${nm} 님, ${kr} : ${mx} 에 10,000원 참가 완료!`);
+    if (online) {
+      setBusy(true);
+      try { await dbPut(`bets/${id}`, entry); } catch (_) { setConn("error"); }
+      setBusy(false); loadPool();
+    }
+  }
+  function startEdit(b) {
+    setEditingKey(b.key); setName(b.name); setKr(b.kr); setMx(b.mx); setError("");
+    try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (_) {}
+  }
+  function cancelEdit() { setEditingKey(null); setName(""); setKr(1); setMx(1); setError(""); }
+  async function deleteBet(b) {
+    if (!window.confirm(`${b.name} 님의 ${b.kr} : ${b.mx} 베팅을 삭제할까요?`)) return;
+    if (editingKey === b.key) cancelEdit();
+    setBets((prev) => prev.filter((x) => x.key !== b.key));
+    if (online) { try { await dbDelete(`bets/${b.key}`); } catch (_) {} loadPool(); }
+  }
+  async function settle() {
+    const res = { kr: rkr, mx: rmx };
+    setResult(res); setReveal("ready"); setAdminOpen(false);
+    if (online) { try { await dbPut("result", res); } catch (_) { setConn("error"); } loadPool(); }
+  }
+  async function unsettle() {
+    setResult(null); setReveal("hidden");
+    if (online) { try { await dbDelete("result"); } catch (_) {} loadPool(); }
+  }
+  async function resetAll() {
+    if (!window.confirm("모든 참가 기록과 결과를 삭제할까요? 되돌릴 수 없어요.")) return;
+    setBets([]); setResult(null); setReveal("hidden"); cancelEdit();
+    if (online) { setBusy(true); try { await dbDelete(""); } catch (_) {} setBusy(false); loadPool(); }
+  }
+
+  // 경기 설정 / 베팅 잠금 제어 (관리자)
+  async function startMatch() {
+    setError("");
+    if (selHome === selAway) { setError("서로 다른 두 팀을 선택하세요."); return; }
+    if (!selKick) { setError("경기 시작(킥오프) 시간을 입력하세요."); return; }
+    const kickMs = new Date(selKick).getTime();
+    if (!kickMs) { setError("시간 형식이 올바르지 않아요."); return; }
+    if (bets.length > 0 && !window.confirm("새 경기를 시작하면 기존 베팅·결과가 모두 초기화됩니다. 계속할까요?")) return;
+    const g = GROUPS[selGroup];
+    const m = {
+      group: selGroup,
+      home: { name: g[selHome][0], flag: g[selHome][1] },
+      away: { name: g[selAway][0], flag: g[selAway][1] },
+      kickoff: kickMs,
+    };
+    setMatch(m); setLock("auto"); setBets([]); setResult(null); setReveal("hidden");
+    setSetupMode(false);
+    if (online) {
+      setBusy(true);
+      try {
+        await dbDelete("bets"); await dbDelete("result");
+        await dbPut("match", m); await dbPut("lock", "auto");
+      } catch (_) { setConn("error"); }
+      setBusy(false); loadPool();
+    }
+    flashMsg(`경기 시작! ${m.home.name} vs ${m.away.name} · 베팅 오픈`);
+  }
+  async function setLockState(v) {
+    setLock(v);
+    if (online) { try { await dbPut("lock", v); } catch (_) { setConn("error"); } loadPool(); }
+    flashMsg(v === "open" ? "베팅을 수동으로 열었어요." : v === "closed" ? "베팅을 수동으로 마감했어요." : "자동(킥오프 기준)으로 전환했어요.");
+  }
+
+  function applyConnection() {
+    let url = dbInput.trim().replace(/\s+/g, "").replace(/\.json$/i, "").replace(/\/+$/, "");
+    const pid = (poolId || "pool").trim();
+    setConnDetail("");
+    if (url) {
+      if (/console\.firebase\.google\.com/.test(url)) {
+        setConn("error");
+        setConnDetail("이건 콘솔 주소예요. Realtime Database 화면 상단의 https://...firebaseio.com (또는 ...firebasedatabase.app) 주소를 넣으세요.");
+        return;
+      }
+      if (!(url.startsWith("http://") || url.startsWith("https://"))) url = "https://" + url;
+      if (!/(firebaseio\.com|firebasedatabase\.app)/.test(url)) {
+        setConn("error");
+        setConnDetail("Realtime Database 주소가 아닌 것 같아요. 주소에 firebaseio.com 또는 firebasedatabase.app 이 포함돼야 해요.");
+        return;
+      }
+    }
+    setPoolId(pid);
+    setDbUrl(url);
+    setDbInput(url);
+    setConn(url ? "connecting" : "local");
+    try {
+      const u = new URL(location.href);
+      if (url) u.searchParams.set("db", url); else u.searchParams.delete("db");
+      u.searchParams.set("pool", pid);
+      history.replaceState(null, "", u.toString());
+    } catch (_) {}
+    flashMsg(url ? "백엔드에 연결합니다…" : "연결을 해제했어요.");
+  }
+  function copyShareLink() {
+    let link = location.href;
+    try {
+      const u = new URL(location.href);
+      if (dbUrl) u.searchParams.set("db", dbUrl);
+      u.searchParams.set("pool", poolId);
+      link = u.toString();
+    } catch (_) {}
+    setShareLink(link);
+    try { if (navigator.clipboard) navigator.clipboard.writeText(link); } catch (_) {}
+    flashMsg("공유 링크를 만들었어요. 아래 칸을 눌러 복사하세요.");
+  }
+
+  // admin pin
+  function toggleAdmin() {
+    setAdminOpen((v) => { const nv = !v; if (!nv) { setUnlocked(false); setPinError(""); } return nv; });
+  }
+  function unlockAdmin(code) {
+    if (code === CONFIG.ADMIN_PIN) { setUnlocked(true); setPinError(""); }
+    else setPinError("PIN이 올바르지 않아요.");
+  }
+  function lockAdmin() { setUnlocked(false); setPinError(""); }
+
+  return (
+    <div style={S.page}>
+      {result && reveal === "playing" && (
+        <RevealOverlay result={result} winners={winners} payout={payout} pot={pot} onDone={() => setReveal("done")} />
+      )}
+      <div style={S.shell}>
+        <header style={S.board}>
+          <div style={S.boardGlow} aria-hidden></div>
+          <div style={S.eyebrow}>2026 월드컵 · {match ? `${match.group}조` : "스코어 맞추기"} · 스코어 맞추기 풀</div>
+          <div style={S.matchup}>
+            <Team flag={match ? match.home.flag : "🏳️"} name={match ? match.home.name : "팀 미정"} color={C.kr} side="left" />
+            <div style={S.versus}>
+              <div style={S.vsScore}>VS</div>
+              <div style={S.kickoff}>
+                {match ? new Date(match.kickoff).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "경기 미설정"}
+              </div>
+            </div>
+            <Team flag={match ? match.away.flag : "🏳️"} name={match ? match.away.name : "팀 미정"} color={C.mx} side="right" />
+          </div>
+          <div style={S.jackpot}>
+            <div style={S.jackLabel}>현재 적립 상금</div>
+            <div style={S.jackValue}>{loading ? "—" : won(pot)}</div>
+            <div style={S.jackSub}>우승 스코어를 맞춘 사람끼리 <b style={{ color: C.gold }}>1/N</b> 분배</div>
+          </div>
+          <div style={S.statRow}>
+            <Stat label="참가 인원" value={loading ? "—" : `${bets.length}명`} />
+            <Stat label="1인 참가비" value={won(ENTRY_FEE)} />
+            <Stat label="예측된 스코어" value={loading ? "—" : `${rows.length}종`} />
+          </div>
+        </header>
+
+        {result && reveal === "ready" && (
+          <section style={S.readyCard}>
+            <div style={S.readyTag}>경기 종료 · 결과 입력 완료</div>
+            <div style={S.readyHead}>두구두구… 결과를 공개할까요?</div>
+            <button style={S.revealBtn} onClick={() => setReveal("playing")}>🥁 결과 공개하기</button>
+          </section>
+        )}
+
+        {result && reveal === "done" && (
+          <section style={S.resultBanner}>
+            <div style={S.resultTag}>경기 종료 · 최종 스코어</div>
+            <div style={S.resultScore}>
+              <span style={{ color: C.kr }}>🇰🇷 {result.kr}</span>
+              <span style={S.resultColon}>:</span>
+              <span style={{ color: C.mx }}>{result.mx} 🇲🇽</span>
+            </div>
+            {winners.length > 0 ? (
+              <div>
+                <div style={S.winHead}>🏆 당첨자 {winners.length}명 · 1인당 <b style={{ color: C.gold }}>{won(payout)}</b></div>
+                <div style={S.chips}>{winners.map((w, i) => <span key={i} style={S.winChip}>{w.name}</span>)}</div>
+              </div>
+            ) : (
+              <div style={S.noWin}>정확히 맞춘 사람이 없어요. 상금 {won(pot)}은 다음 경기로 이월하거나 환불하세요.</div>
+            )}
+            <button style={S.replayBtn} onClick={() => setReveal("playing")}>🔁 다시 보기</button>
+          </section>
+        )}
+
+        <section style={{ ...S.card, ...(editing ? S.cardEditing : {}) }}>
+          <div style={S.cardTitle}>
+            <span style={{ ...S.titleNo, ...(editing ? S.titleNoEdit : {}) }}>01</span>
+            {editing ? "베팅 수정" : "스코어 걸기"}
+          </div>
+
+          <div style={{ ...S.statusBar, ...(closed ? S.statusClosed : S.statusOpen) }}>
+            {!match ? "관리자가 아직 경기를 설정하지 않았어요."
+              : result ? "경기 종료 · 베팅 마감"
+              : lock === "closed" ? "⛔ 관리자가 베팅을 마감했어요."
+              : lock === "open" ? "🟢 베팅 진행 중 (관리자가 수동으로 열어둠)"
+              : now >= match.kickoff ? "⛔ 킥오프 시간 경과 · 베팅 자동 마감"
+              : `🟢 베팅 마감까지 ${fmtCountdown(msToKick)}`}
+          </div>
+
+          <p style={S.cardHint}>{editing ? "스코어를 바꾸고 저장하세요." : "예상 최종 스코어를 고르고 10,000원을 거세요."}</p>
+          <input style={S.input} placeholder="이름 또는 닉네임" value={name}
+            onChange={(e) => setName(e.target.value)} disabled={closed} maxLength={16} />
+          <div style={S.pickRow}>
+            <ScorePicker label={`${match ? match.home.flag : "🏳️"} ${match ? match.home.name : "홈"}`} color={C.kr} value={kr} setValue={setKr} disabled={closed} />
+            <div style={S.pickColon}>:</div>
+            <ScorePicker label={`${match ? match.away.name : "원정"} ${match ? match.away.flag : "🏳️"}`} color={C.mx} value={mx} setValue={setMx} disabled={closed} />
+          </div>
+          {error && <div style={S.error}>{error}</div>}
+          {flash && <div style={S.flash}>{flash}</div>}
+          <button style={{ ...S.cta, ...(closed || busy ? S.ctaOff : {}) }} onClick={submitBet} disabled={closed || busy}>
+            {!match ? "경기 대기 중" : closed ? "베팅 마감" : busy ? "처리 중…" : editing ? "수정 저장" : `${kr} : ${mx} 에 10,000원 걸기`}
+          </button>
+          {editing && <button style={S.cancelBtn} onClick={cancelEdit}>수정 취소</button>}
+        </section>
+
+        <section style={S.card}>
+          <div style={S.cardTitle}><span style={S.titleNo}>02</span> 참가자 관리</div>
+          <p style={S.cardHint}>{closed ? "베팅이 마감되어 수정·삭제가 잠겼어요." : "본인 베팅을 수정하거나 삭제할 수 있어요."}</p>
+          {loading ? <div style={S.empty}>불러오는 중…</div>
+            : bets.length === 0 ? <div style={S.empty}>아직 참가자가 없어요.</div>
+            : (
+              <div style={S.mlist}>
+                {bets.map((b) => (
+                  <div key={b.key} style={{ ...S.mrow, ...(editingKey === b.key ? S.mrowActive : {}) }}>
+                    <div style={S.mname}>{b.name}</div>
+                    <div style={S.mscore}>
+                      <span style={{ color: C.kr, fontWeight: 800 }}>{b.kr}</span>
+                      <span style={{ color: C.faint, margin: "0 5px" }}>:</span>
+                      <span style={{ color: C.mx, fontWeight: 800 }}>{b.mx}</span>
+                    </div>
+                    <div style={S.mbtns}>
+                      <button style={{ ...S.mEdit, ...(closed ? S.mDisabled : {}) }} onClick={() => startEdit(b)} disabled={closed}>수정</button>
+                      <button style={{ ...S.mDel, ...(closed ? S.mDisabled : {}) }} onClick={() => deleteBet(b)} disabled={closed}>삭제</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+        </section>
+
+        <section style={S.card}>
+          <div style={S.cardTitle}><span style={S.titleNo}>03</span> 스코어별 베팅 현황</div>
+          <p style={S.cardHint}>막대는 좌측 한국 · 우측 멕시코 점수를 나타내요.</p>
+          {loading ? <div style={S.empty}>불러오는 중…</div>
+            : rows.length === 0 ? <div style={S.empty}>아직 베팅이 없어요. 첫 스코어를 걸어 보세요.</div>
+            : (
+              <div style={S.bars}>
+                {rows.map((r) => {
+                  const isWin = result && reveal === "done" && r.kr === result.kr && r.mx === result.mx;
+                  const w = (r.count / maxCount) * 100;
+                  return (
+                    <div key={`${r.kr}-${r.mx}`} style={{ ...S.barRow, ...(isWin ? S.barRowWin : {}) }}>
+                      <div style={S.barTop}>
+                        <div style={S.barScore}>
+                          <span style={{ color: C.kr, fontWeight: 800 }}>{r.kr}</span>
+                          <span style={{ color: C.faint, margin: "0 4px" }}>:</span>
+                          <span style={{ color: C.mx, fontWeight: 800 }}>{r.mx}</span>
+                          {isWin && <span style={S.crown}>🏆</span>}
+                        </div>
+                        <div style={S.barMeta}>
+                          <span style={{ color: C.text, fontWeight: 700 }}>{r.count}명</span>
+                          <span style={{ color: C.faint }}> · </span>
+                          <span style={{ color: C.gold }}>{won(r.total)}</span>
+                          <span style={{ color: C.faint }}> · {Math.round(r.pct * 100)}%</span>
+                        </div>
+                      </div>
+                      <div style={S.track}>
+                        <div style={{ ...S.fill, width: `${w}%`, background: `linear-gradient(90deg, ${C.kr}, ${C.mx})`, boxShadow: isWin ? `0 0 14px ${C.gold}` : "none" }}></div>
+                      </div>
+                      <div style={S.chips}>{r.names.map((n, i) => <span key={i} style={S.chip}>{n}</span>)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+        </section>
+
+        <section style={S.adminCard}>
+          <button style={S.adminToggle} onClick={toggleAdmin}>
+            {unlocked ? "🔓" : "🔒"} 관리자 · 경기 설정 / 결과 / 베팅 잠금 {adminOpen ? "▲" : "▼"}
+          </button>
+          {adminOpen && (
+            <div style={S.adminBody}>
+              {!unlocked ? (
+                <PinGate onComplete={unlockAdmin} error={pinError} setError={setPinError} />
+              ) : (
+                <div>
+                  <div style={S.adminUnlockedRow}>
+                    <span style={S.adminUnlockedTag}>🔓 잠금 해제됨</span>
+                    <button style={S.pinSmallBtn} onClick={lockAdmin}>잠그기</button>
+                  </div>
+
+                  <div style={S.adminSection}>
+                    <div style={S.adminH}>① 백엔드 연결 (실시간 공유)</div>
+                    <p style={S.cardHint}>
+                      Firebase 주소를 넣고 연결하면 모든 참가자와 실시간 공유돼요.
+                      현재: {conn === "live" ? "🟢 연결됨" : conn === "connecting" ? "🟡 연결 중" : conn === "error" ? "🔴 실패(주소/규칙 확인)" : "⚪ 미연결"}
+                    </p>
+                    {conn === "error" && connDetail && (
+                      <div style={S.connErr}>
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>오류: {connDetail}</div>
+                        <div>
+                          {/40[13]|Permission denied|denied/i.test(connDetail)
+                            ? "→ 규칙(Rules)이 막혀 있어요. Realtime Database > 규칙에서 공개 규칙으로 바꿔 저장하세요."
+                            : /40[04]|not found|404/i.test(connDetail)
+                            ? "→ 주소(지역 포함)가 틀렸거나 Realtime Database가 아닐 수 있어요. 콘솔 상단 주소를 그대로 복사하세요."
+                            : /fetch|network|timeout|load failed|cors/i.test(connDetail)
+                            ? "→ 네트워크가 막혔어요. Claude 미리보기에선 막히니, 호스팅한 페이지(Netlify 등)에서 다시 시도하세요."
+                            : "→ 주소·규칙·호스팅 여부를 확인하세요."}
+                        </div>
+                      </div>
+                    )}
+                    <label style={S.fieldLabel}>Firebase DB 주소</label>
+                    <input style={S.select} placeholder="https://...firebaseio.com" value={dbInput} onChange={(e) => setDbInput(e.target.value)} />
+                    <label style={S.fieldLabel}>풀 ID (같은 주소에서 여러 경기 구분)</label>
+                    <input style={S.select} value={poolId} onChange={(e) => setPoolId(e.target.value)} />
+                    <div style={S.adminBtns}>
+                      <button style={S.adminPrimary} onClick={applyConnection} disabled={busy}>연결</button>
+                      <button style={S.adminGhost} onClick={copyShareLink} disabled={!dbUrl}>참가자 공유 링크 만들기</button>
+                    </div>
+                    {shareLink && (
+                      <input style={{ ...S.select, marginTop: 8, color: C.gold }} readOnly value={shareLink}
+                        onFocus={(e) => e.target.select()} onClick={(e) => e.target.select()} />
+                    )}
+                    <p style={S.cardHint}>이 링크로 열면 누구나 같은 풀에 자동 연결돼요(코드 수정 불필요).</p>
+                  </div>
+
+                  {(setupMode || !match) ? (
+                    <div style={S.adminSection}>
+                      <div style={S.adminH}>② 경기 설정</div>
+                      <p style={S.cardHint}>조 → 두 팀 → 킥오프 시간을 정하고 시작하면 베팅이 열려요.</p>
+                      <label style={S.fieldLabel}>조 선택</label>
+                      <select style={S.select} value={selGroup}
+                        onChange={(e) => { setSelGroup(e.target.value); setSelHome(0); setSelAway(2); }}>
+                        {GROUP_KEYS.map((k) => <option key={k} value={k}>{k}조</option>)}
+                      </select>
+                      <div style={S.twoCol}>
+                        <div style={{ flex: 1 }}>
+                          <label style={S.fieldLabel}>홈 팀</label>
+                          <select style={S.select} value={selHome} onChange={(e) => setSelHome(+e.target.value)}>
+                            {GROUPS[selGroup].map((t, i) => <option key={i} value={i}>{t[1]} {t[0]}</option>)}
+                          </select>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={S.fieldLabel}>원정 팀</label>
+                          <select style={S.select} value={selAway} onChange={(e) => setSelAway(+e.target.value)}>
+                            {GROUPS[selGroup].map((t, i) => <option key={i} value={i}>{t[1]} {t[0]}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <label style={S.fieldLabel}>킥오프(경기 시작) 시간</label>
+                      <input style={S.select} type="datetime-local" value={selKick} onChange={(e) => setSelKick(e.target.value)} />
+                      {error && <div style={S.error}>{error}</div>}
+                      <div style={S.adminBtns}>
+                        <button style={S.adminPrimary} onClick={startMatch} disabled={busy}>경기 시작 · 베팅 열기</button>
+                        {match && <button style={S.adminGhost} onClick={() => { setSetupMode(false); setError(""); }}>취소</button>}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={S.adminSection}>
+                      <div style={S.adminH}>{match.group}조 · {match.home.flag} {match.home.name} vs {match.away.name} {match.away.flag}</div>
+                      <p style={S.cardHint}>
+                        킥오프 {new Date(match.kickoff).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        {" · "}현재 베팅 {closed ? "마감" : "열림"} ({lock === "auto" ? "자동" : lock === "open" ? "수동 열림" : "수동 마감"})
+                      </p>
+                      <div style={S.adminBtns}>
+                        <button style={S.adminPrimary} onClick={() => setLockState("open")} disabled={busy || !!result}>베팅 열기/재개</button>
+                        <button style={S.adminDanger} onClick={() => setLockState("closed")} disabled={busy || !!result}>베팅 마감</button>
+                        <button style={S.adminGhost} onClick={() => setLockState("auto")} disabled={busy || !!result}>자동(킥오프 기준)</button>
+                        <button style={S.adminGhost} onClick={() => { setSetupMode(true); setError(""); }} disabled={busy}>새 경기 설정</button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={S.adminDivider}></div>
+                  <div style={S.adminH}>③ 경기 결과 입력</div>
+                  <p style={S.cardHint}>최종 스코어를 입력하면 당첨자와 분배금이 자동 계산돼요.</p>
+                  <div style={S.pickRow}>
+                    <ScorePicker label={`${match ? match.home.flag : "🏳️"} ${match ? match.home.name : "홈"}`} color={C.kr} value={rkr} setValue={setRkr} />
+                    <div style={S.pickColon}>:</div>
+                    <ScorePicker label={`${match ? match.away.name : "원정"} ${match ? match.away.flag : "🏳️"}`} color={C.mx} value={rmx} setValue={setRmx} />
+                  </div>
+                  <div style={S.adminBtns}>
+                    <button style={S.adminPrimary} onClick={settle} disabled={busy || !match}>결과 확정 · 정산</button>
+                    {result && <button style={S.adminGhost} onClick={unsettle} disabled={busy}>결과 취소</button>}
+                    <button style={S.adminDanger} onClick={resetAll} disabled={busy}>전체 초기화</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        <footer style={S.foot}>
+          {conn === "live" && "🟢 실시간 공유 연결됨 — 모든 참가자가 같은 풀을 봅니다."}
+          {conn === "connecting" && "🟡 서버에 연결 중…"}
+          {conn === "error" && "🔴 서버 연결 실패 — 화면엔 보이지만 공유가 안 될 수 있어요. DB_URL/규칙을 확인하세요."}
+          {conn === "local" && "⚪ 백엔드 미설정 — 이 기기 전용입니다. 코드 상단 CONFIG.DB_URL 을 입력하면 공유돼요."}
+          <br />친목용 더치페이 풀
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Reveal Overlay ---------- */
+function RevealOverlay({ result, winners, payout, pot, onDone }) {
+  const [phase, setPhase] = useState(0);
+  const [krShown, setKrShown] = useState(0);
+  const [mxShown, setMxShown] = useState(0);
+  useEffect(() => {
+    const t = [];
+    t.push(setTimeout(() => setPhase(1), 500));
+    t.push(setTimeout(() => setPhase(2), 1250));
+    t.push(setTimeout(() => setPhase(3), 2000));
+    t.push(setTimeout(() => setPhase(4), 2800));
+    t.push(setTimeout(() => setPhase(5), 4400));
+    return () => t.forEach(clearTimeout);
+  }, []);
+  useEffect(() => {
+    if (phase < 4) return;
+    let k = 0, m = 0; setKrShown(0); setMxShown(0);
+    const iv = setInterval(() => {
+      let done = true;
+      if (k < result.kr) { k += 1; setKrShown(k); done = false; }
+      if (m < result.mx) { m += 1; setMxShown(m); done = false; }
+      if (done) clearInterval(iv);
+    }, 200);
+    return () => clearInterval(iv);
+  }, [phase, result]);
+  const pieces = useMemo(() => Array.from({ length: 40 }, (_, i) => ({
+    left: Math.random() * 100, delay: Math.random() * 0.6, dur: 1.8 + Math.random() * 1.6,
+    color: [C.gold, C.kr, C.mx, "#ffffff", C.krBlue][i % 5], size: 6 + Math.random() * 8,
+  })), []);
+  const win = winners.length > 0;
+  return (
+    <div style={S.ov} role="dialog" aria-label="결과 발표">
+      <button style={S.ovSkip} onClick={onDone}>건너뛰기 ✕</button>
+      {phase < 4 && (
+        <div style={S.ovCenter}>
+          <div style={S.ovKicker}>{phase === 0 ? "결과 공개" : "킥오프 휘슬"}</div>
+          {phase === 0 && <div style={S.drum}><span style={{ ...S.dot }}></span><span style={{ ...S.dot, animationDelay: ".15s" }}></span><span style={{ ...S.dot, animationDelay: ".3s" }}></span></div>}
+          {phase >= 1 && phase <= 3 && <div key={phase} style={S.count}>{4 - phase}</div>}
+        </div>
+      )}
+      {phase >= 4 && (
+        <div style={S.ovCenter}>
+          <div style={S.ovKicker}>최종 스코어</div>
+          <div key="board" style={S.revBoard}>
+            <div style={S.revSide}><div style={S.revFlag}>🇰🇷</div><div style={{ ...S.revNum, color: C.kr }}>{krShown}</div><div style={S.revTeam}>한국</div></div>
+            <div style={S.revColon}>:</div>
+            <div style={S.revSide}><div style={S.revFlag}>🇲🇽</div><div style={{ ...S.revNum, color: C.mx }}>{mxShown}</div><div style={S.revTeam}>멕시코</div></div>
+          </div>
+          {phase >= 5 && (
+            <div key="verdict" style={S.verdict}>
+              {win ? (
+                <div>
+                  <div style={S.verWin}>🏆 당첨!</div>
+                  <div style={S.verSub}>{winners.length}명 적중 · 1인당 <b style={{ color: C.gold }}>{won(payout)}</b></div>
+                  <div style={S.chips}>{winners.map((w, i) => <span key={i} style={S.winChip}>{w.name}</span>)}</div>
+                </div>
+              ) : (
+                <div>
+                  <div style={S.verMiss}>적중자 없음 😢</div>
+                  <div style={S.verSub}>상금 {won(pot)}은 이월 또는 환불</div>
+                </div>
+              )}
+              <button style={S.ovConfirm} onClick={onDone}>확인</button>
+            </div>
+          )}
+        </div>
+      )}
+      {phase >= 5 && win && (
+        <div style={S.confettiWrap} aria-hidden>
+          {pieces.map((p, i) => (
+            <div key={i} style={{ position: "absolute", left: `${p.left}%`, top: 0, width: p.size, height: p.size * 0.45, background: p.color, borderRadius: 2, animation: `confettiFall ${p.dur}s linear ${p.delay}s infinite` }}></div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- PIN gate ---------- */
+function PinGate({ onComplete, error, setError }) {
+  const [val, setVal] = useState("");
+  useEffect(() => {
+    if (val.length < 4) return;
+    const code = val;
+    const t = setTimeout(() => setVal(""), 120);
+    onComplete(code);
+    return () => clearTimeout(t);
+  }, [val]);
+  const press = (d) => { setError(""); setVal((v) => (v.length < 4 ? v + d : v)); };
+  const back = () => setVal((v) => v.slice(0, -1));
+  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"];
+  return (
+    <div style={S.pinWrap}>
+      <div style={S.pinHead}>관리자 PIN 입력</div>
+      <div style={S.pinSub}>정산·초기화는 관리자만 가능해요.</div>
+      <div style={S.pinDots}>{[0, 1, 2, 3].map((i) => <div key={i} style={{ ...S.pinDot, ...(i < val.length ? S.pinDotOn : {}) }}></div>)}</div>
+      {error && <div style={S.pinErr}>{error}</div>}
+      <div style={S.pinPad}>
+        {keys.map((k, i) => k === "" ? <div key={i}></div> :
+          <button key={i} style={S.pinKey} onClick={() => (k === "⌫" ? back() : press(k))}>{k}</button>)}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- small components ---------- */
+function Team({ flag, name, color, side }) {
+  return (
+    <div style={{ ...S.team, alignItems: side === "left" ? "flex-start" : "flex-end" }}>
+      <div style={S.flag}>{flag}</div>
+      <div style={{ ...S.teamName, color }}>{name}</div>
+      <div style={{ ...S.teamBar, background: color, marginLeft: side === "left" ? 0 : "auto" }}></div>
+    </div>
+  );
+}
+function Stat({ label, value }) {
+  return <div style={S.stat}><div style={S.statVal}>{value}</div><div style={S.statLbl}>{label}</div></div>;
+}
+function ScorePicker({ label, color, value, setValue, disabled }) {
+  return (
+    <div style={S.picker}>
+      <div style={{ ...S.pickLabel, color }}>{label}</div>
+      <div style={S.stepper}>
+        <button style={{ ...S.stepBtn, opacity: disabled ? 0.4 : 1 }} onClick={() => setValue(Math.max(0, value - 1))} disabled={disabled}>−</button>
+        <div style={{ ...S.stepVal, color, borderColor: color }}>{value}</div>
+        <button style={{ ...S.stepBtn, opacity: disabled ? 0.4 : 1 }} onClick={() => setValue(Math.min(9, value + 1))} disabled={disabled}>+</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- styles ---------- */
+const mono = "'SF Mono', ui-monospace, 'Roboto Mono', Menlo, Consolas, monospace";
+const sans = "'Pretendard', system-ui, -apple-system, 'Apple SD Gothic Neo', sans-serif";
+const S = {
+  page: { minHeight: "100vh", background: C.bg, color: C.text, fontFamily: sans, padding: "20px 14px 40px" },
+  shell: { maxWidth: 560, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 },
+  board: { position: "relative", overflow: "hidden", background: `linear-gradient(180deg, ${C.panel}, ${C.panel2})`, border: `1px solid ${C.line}`, borderRadius: 20, padding: "22px 18px 20px" },
+  boardGlow: { position: "absolute", top: -120, left: "50%", transform: "translateX(-50%)", width: 320, height: 220, background: `radial-gradient(closest-side, ${C.gold}22, transparent)`, pointerEvents: "none" },
+  eyebrow: { textAlign: "center", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.muted, fontWeight: 700 },
+  matchup: { display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 8, margin: "16px 0 18px" },
+  team: { display: "flex", flexDirection: "column", gap: 6 },
+  flag: { fontSize: 46, lineHeight: 1, filter: "drop-shadow(0 4px 10px rgba(0,0,0,.5))" },
+  teamName: { fontSize: 17, fontWeight: 800, letterSpacing: -0.3 },
+  teamBar: { width: 42, height: 4, borderRadius: 2 },
+  versus: { textAlign: "center" },
+  vsScore: { fontFamily: mono, fontSize: 22, fontWeight: 800, color: C.faint, letterSpacing: 1 },
+  kickoff: { fontSize: 10, color: C.faint, marginTop: 2 },
+  jackpot: { textAlign: "center", padding: "14px 0 6px", borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}` },
+  jackLabel: { fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: C.muted, fontWeight: 700 },
+  jackValue: { fontFamily: mono, fontSize: 40, fontWeight: 800, color: C.gold, lineHeight: 1.1, margin: "6px 0 4px", textShadow: `0 0 22px ${C.gold}55`, animation: "pulse 3s ease-in-out infinite" },
+  jackSub: { fontSize: 12.5, color: C.muted },
+  statRow: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginTop: 14 },
+  stat: { textAlign: "center" },
+  statVal: { fontFamily: mono, fontSize: 17, fontWeight: 700, color: C.text },
+  statLbl: { fontSize: 10.5, color: C.muted, marginTop: 3 },
+  readyCard: { textAlign: "center", background: `linear-gradient(180deg, #1a2444, ${C.panel2})`, border: `1px solid ${C.goldDim}`, borderRadius: 18, padding: "20px 18px" },
+  readyTag: { fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: C.gold, fontWeight: 700 },
+  readyHead: { fontSize: 18, fontWeight: 800, margin: "8px 0 16px" },
+  revealBtn: { width: "100%", padding: "16px", borderRadius: 14, border: "none", cursor: "pointer", fontSize: 17, fontWeight: 800, color: "#1a1205", background: `linear-gradient(90deg, ${C.gold}, #ffd877)`, boxShadow: `0 6px 24px ${C.gold}44`, animation: "pulse 2s ease-in-out infinite" },
+  resultBanner: { background: `linear-gradient(180deg, #1a2444, ${C.panel2})`, border: `1px solid ${C.goldDim}`, borderRadius: 18, padding: "16px 18px", textAlign: "center" },
+  resultTag: { fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: C.gold, fontWeight: 700 },
+  resultScore: { fontFamily: mono, fontSize: 30, fontWeight: 800, margin: "6px 0 10px", display: "flex", justifyContent: "center", alignItems: "center", gap: 12 },
+  resultColon: { color: C.faint },
+  winHead: { fontSize: 14.5, marginBottom: 8 },
+  noWin: { fontSize: 13, color: C.muted, lineHeight: 1.5 },
+  winChip: { background: C.gold, color: "#22180a", fontWeight: 800, fontSize: 12.5, padding: "4px 11px", borderRadius: 999 },
+  replayBtn: { marginTop: 14, background: "transparent", border: `1px solid ${C.line}`, color: C.muted, fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 999, cursor: "pointer" },
+  card: { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 18, padding: "18px 18px 20px" },
+  cardEditing: { borderColor: C.gold, boxShadow: `0 0 0 1px ${C.gold}44` },
+  cardTitle: { fontSize: 16, fontWeight: 800, display: "flex", alignItems: "center", gap: 10 },
+  titleNo: { fontFamily: mono, fontSize: 12, color: C.bg, background: C.gold, fontWeight: 800, padding: "2px 7px", borderRadius: 6 },
+  titleNoEdit: { background: C.krBlue, color: "#fff" },
+  cardHint: { fontSize: 12.5, color: C.muted, margin: "8px 0 14px" },
+  input: { width: "100%", background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 12, color: C.text, fontSize: 15, padding: "12px 14px", outline: "none", marginBottom: 16, fontFamily: sans },
+  pickRow: { display: "flex", alignItems: "center", justifyContent: "center", gap: 10 },
+  pickColon: { fontFamily: mono, fontSize: 28, color: C.faint, fontWeight: 700, paddingTop: 22 },
+  picker: { flex: 1, textAlign: "center" },
+  pickLabel: { fontSize: 13, fontWeight: 800, marginBottom: 8 },
+  stepper: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8 },
+  stepBtn: { width: 38, height: 44, borderRadius: 10, border: `1px solid ${C.line}`, background: C.panel2, color: C.text, fontSize: 22, fontWeight: 700, cursor: "pointer", lineHeight: 1 },
+  stepVal: { fontFamily: mono, fontSize: 30, fontWeight: 800, width: 54, height: 56, lineHeight: "56px", textAlign: "center", borderRadius: 12, border: "2px solid", background: C.bg },
+  error: { color: "#ff8a8a", fontSize: 13, marginTop: 14, textAlign: "center" },
+  flash: { color: C.mx, fontSize: 13, marginTop: 14, textAlign: "center", fontWeight: 600 },
+  cta: { width: "100%", marginTop: 16, padding: "15px", borderRadius: 14, border: "none", cursor: "pointer", fontSize: 16, fontWeight: 800, color: "#1a1205", background: `linear-gradient(90deg, ${C.gold}, #ffd877)`, boxShadow: `0 6px 20px ${C.gold}33` },
+  ctaOff: { background: C.line, color: C.faint, boxShadow: "none", cursor: "not-allowed" },
+  cancelBtn: { width: "100%", marginTop: 10, padding: "12px", borderRadius: 12, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 14, cursor: "pointer" },
+  mlist: { display: "flex", flexDirection: "column", gap: 8 },
+  mrow: { display: "flex", alignItems: "center", gap: 10, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 12, padding: "10px 12px" },
+  mrowActive: { borderColor: C.gold },
+  mname: { flex: 1, fontSize: 14, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  mscore: { fontFamily: mono, fontSize: 18, minWidth: 52, textAlign: "center" },
+  mbtns: { display: "flex", gap: 6 },
+  mEdit: { padding: "7px 12px", borderRadius: 9, border: `1px solid ${C.krBlue}`, background: "transparent", color: "#9db8ff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" },
+  mDel: { padding: "7px 12px", borderRadius: 9, border: `1px solid ${C.mxRed}`, background: "transparent", color: "#ff9b9b", fontSize: 12.5, fontWeight: 700, cursor: "pointer" },
+  mDisabled: { opacity: 0.35, cursor: "not-allowed" },
+  empty: { textAlign: "center", color: C.muted, fontSize: 13.5, padding: "26px 0" },
+  bars: { display: "flex", flexDirection: "column", gap: 14 },
+  barRow: { background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 14, padding: "12px 13px" },
+  barRowWin: { borderColor: C.gold, boxShadow: `0 0 0 1px ${C.gold}55, 0 0 22px ${C.gold}22` },
+  barTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 },
+  barScore: { fontFamily: mono, fontSize: 22, display: "flex", alignItems: "center" },
+  crown: { marginLeft: 8, fontSize: 16 },
+  barMeta: { fontSize: 12.5, fontFamily: mono },
+  track: { height: 10, background: "#0a1120", borderRadius: 6, overflow: "hidden" },
+  fill: { height: "100%", borderRadius: 6, transition: "width .6s cubic-bezier(.2,.8,.2,1)" },
+  chips: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10, justifyContent: "center" },
+  chip: { background: "#1b2540", border: `1px solid ${C.line}`, color: C.muted, fontSize: 11.5, padding: "3px 9px", borderRadius: 999 },
+  adminCard: { background: C.panel2, border: `1px dashed ${C.line}`, borderRadius: 16, overflow: "hidden" },
+  adminToggle: { width: "100%", background: "transparent", border: "none", color: C.muted, fontSize: 13.5, fontWeight: 700, padding: "14px", cursor: "pointer", textAlign: "left" },
+  adminBody: { padding: "0 16px 18px" },
+  adminBtns: { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 },
+  adminPrimary: { flex: "1 1 140px", padding: "12px", borderRadius: 11, border: "none", background: C.krBlue, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" },
+  adminGhost: { flex: "1 1 90px", padding: "12px", borderRadius: 11, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, fontWeight: 700, fontSize: 14, cursor: "pointer" },
+  adminDanger: { flex: "1 1 90px", padding: "12px", borderRadius: 11, border: `1px solid ${C.mxRed}`, background: "transparent", color: "#ff8a8a", fontWeight: 700, fontSize: 14, cursor: "pointer" },
+  adminUnlockedRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 },
+  adminUnlockedTag: { fontSize: 12.5, fontWeight: 800, color: C.mx },
+  pinSmallBtn: { background: "transparent", border: `1px solid ${C.line}`, color: C.muted, fontSize: 12, fontWeight: 700, padding: "6px 11px", borderRadius: 9, cursor: "pointer" },
+  statusBar: { textAlign: "center", fontSize: 13, fontWeight: 800, padding: "10px", borderRadius: 11, marginBottom: 14, fontFamily: mono },
+  connErr: { background: "rgba(214,40,40,.1)", border: `1px solid ${C.mxRed}`, color: "#ffb4b4", fontSize: 12, lineHeight: 1.5, padding: "10px 12px", borderRadius: 10, marginTop: 8, wordBreak: "break-word" },
+  statusOpen: { background: "rgba(0,164,90,.14)", color: "#5fe0a0", border: `1px solid ${C.mx}` },
+  statusClosed: { background: "rgba(214,40,40,.12)", color: "#ff9b9b", border: `1px solid ${C.mxRed}` },
+  adminSection: { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 12px 14px", marginBottom: 12 },
+  adminH: { fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 4 },
+  adminDivider: { height: 1, background: C.line, margin: "6px 0 12px" },
+  fieldLabel: { display: "block", fontSize: 11.5, color: C.muted, fontWeight: 700, margin: "10px 0 5px" },
+  select: { width: "100%", boxSizing: "border-box", background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, color: C.text, fontSize: 14, padding: "10px 12px", outline: "none", fontFamily: sans },
+  twoCol: { display: "flex", gap: 10 },
+  foot: { textAlign: "center", fontSize: 11, color: C.faint, marginTop: 4, lineHeight: 1.7 },
+  pinWrap: { textAlign: "center", padding: "6px 0 2px" },
+  pinHead: { fontSize: 15.5, fontWeight: 800, color: C.text },
+  pinSub: { fontSize: 12, color: C.muted, margin: "6px 0 14px" },
+  pinDots: { display: "flex", gap: 14, justifyContent: "center", marginBottom: 12 },
+  pinDot: { width: 14, height: 14, borderRadius: "50%", border: `2px solid ${C.line}`, background: "transparent", transition: "all .15s" },
+  pinDotOn: { background: C.gold, borderColor: C.gold, boxShadow: `0 0 10px ${C.gold}66` },
+  pinErr: { color: "#ff8a8a", fontSize: 12.5, marginBottom: 10 },
+  pinPad: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, maxWidth: 260, margin: "0 auto" },
+  pinKey: { padding: "14px 0", borderRadius: 12, border: `1px solid ${C.line}`, background: C.panel, color: C.text, fontFamily: mono, fontSize: 22, fontWeight: 700, cursor: "pointer" },
+  ov: { position: "fixed", inset: 0, zIndex: 50, background: "rgba(5,8,16,.92)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, overflow: "hidden" },
+  ovSkip: { position: "absolute", top: 16, right: 16, background: "transparent", border: `1px solid ${C.line}`, color: C.muted, fontSize: 12.5, fontWeight: 700, padding: "7px 12px", borderRadius: 999, cursor: "pointer", zIndex: 2 },
+  ovCenter: { textAlign: "center", maxWidth: 460, width: "100%", position: "relative", zIndex: 2 },
+  ovKicker: { fontSize: 12, letterSpacing: 3, textTransform: "uppercase", color: C.gold, fontWeight: 800, marginBottom: 12 },
+  drum: { display: "flex", gap: 10, justifyContent: "center", marginTop: 12 },
+  dot: { width: 14, height: 14, borderRadius: "50%", background: C.gold, display: "inline-block", animation: "drumBounce 0.9s ease-in-out infinite" },
+  count: { fontFamily: mono, fontSize: 140, fontWeight: 800, color: C.text, lineHeight: 1, textShadow: `0 0 40px ${C.gold}66`, animation: "popIn 0.5s cubic-bezier(.2,1.3,.4,1)" },
+  revBoard: { display: "flex", alignItems: "center", justifyContent: "center", gap: 18, animation: "boardIn 0.6s cubic-bezier(.2,1,.3,1)" },
+  revSide: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
+  revFlag: { fontSize: 52, lineHeight: 1 },
+  revNum: { fontFamily: mono, fontSize: 92, fontWeight: 800, lineHeight: 1, textShadow: "0 0 30px currentColor" },
+  revTeam: { fontSize: 14, fontWeight: 800, color: C.muted },
+  revColon: { fontFamily: mono, fontSize: 60, fontWeight: 800, color: C.faint },
+  verdict: { marginTop: 22, animation: "verdictIn 0.5s ease-out" },
+  verWin: { fontSize: 34, fontWeight: 800, color: C.gold, textShadow: `0 0 30px ${C.gold}66` },
+  verMiss: { fontSize: 26, fontWeight: 800, color: C.muted },
+  verSub: { fontSize: 15, color: C.text, marginTop: 8 },
+  ovConfirm: { marginTop: 20, padding: "13px 40px", borderRadius: 12, border: "none", cursor: "pointer", fontSize: 15, fontWeight: 800, color: "#1a1205", background: `linear-gradient(90deg, ${C.gold}, #ffd877)` },
+  confettiWrap: { position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 1 },
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
