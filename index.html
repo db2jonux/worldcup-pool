@@ -376,7 +376,7 @@ function App() {
   return (
     <div style={S.page}>
       {result && reveal === "playing" && (
-        <RevealOverlay result={result} winners={winners} payout={payout} pot={pot} onDone={() => setReveal("done")} />
+        <RevealOverlay result={result} match={match} winners={winners} payout={payout} pot={pot} onDone={() => setReveal("done")} />
       )}
       <div style={S.shell}>
         <header style={S.board}>
@@ -416,9 +416,9 @@ function App() {
           <section style={S.resultBanner}>
             <div style={S.resultTag}>경기 종료 · 최종 스코어</div>
             <div style={S.resultScore}>
-              <span style={{ color: C.kr }}>🇰🇷 {result.kr}</span>
+              <span style={{ color: C.kr }}>{match ? match.home.flag : "🏳️"} {result.kr}</span>
               <span style={S.resultColon}>:</span>
-              <span style={{ color: C.mx }}>{result.mx} 🇲🇽</span>
+              <span style={{ color: C.mx }}>{result.mx} {match ? match.away.flag : "🏳️"}</span>
             </div>
             {winners.length > 0 ? (
               <div>
@@ -654,7 +654,7 @@ function App() {
 }
 
 /* ---------- Reveal Overlay ---------- */
-function RevealOverlay({ result, winners, payout, pot, onDone }) {
+function RevealOverlay({ result, match, winners, payout, pot, onDone }) {
   const [phase, setPhase] = useState(0);
   const [krShown, setKrShown] = useState(0);
   const [mxShown, setMxShown] = useState(0);
@@ -677,7 +677,7 @@ function RevealOverlay({ result, winners, payout, pot, onDone }) {
       if (done) clearInterval(iv);
     }, 200);
     return () => clearInterval(iv);
-  }, [phase, result]);
+  }, [phase, result.kr, result.mx]);
   const pieces = useMemo(() => Array.from({ length: 40 }, (_, i) => ({
     left: Math.random() * 100, delay: Math.random() * 0.6, dur: 1.8 + Math.random() * 1.6,
     color: [C.gold, C.kr, C.mx, "#ffffff", C.krBlue][i % 5], size: 6 + Math.random() * 8,
@@ -697,9 +697,9 @@ function RevealOverlay({ result, winners, payout, pot, onDone }) {
         <div style={S.ovCenter}>
           <div style={S.ovKicker}>최종 스코어</div>
           <div key="board" style={S.revBoard}>
-            <div style={S.revSide}><div style={S.revFlag}>🇰🇷</div><div style={{ ...S.revNum, color: C.kr }}>{krShown}</div><div style={S.revTeam}>한국</div></div>
+            <div style={S.revSide}><div style={S.revFlag}>{match ? match.home.flag : "🏳️"}</div><div style={{ ...S.revNum, color: C.kr }}>{krShown}</div><div style={S.revTeam}>{match ? match.home.name : "홈"}</div></div>
             <div style={S.revColon}>:</div>
-            <div style={S.revSide}><div style={S.revFlag}>🇲🇽</div><div style={{ ...S.revNum, color: C.mx }}>{mxShown}</div><div style={S.revTeam}>멕시코</div></div>
+            <div style={S.revSide}><div style={S.revFlag}>{match ? match.away.flag : "🏳️"}</div><div style={{ ...S.revNum, color: C.mx }}>{mxShown}</div><div style={S.revTeam}>{match ? match.away.name : "원정"}</div></div>
           </div>
           {phase >= 5 && (
             <div key="verdict" style={S.verdict}>
