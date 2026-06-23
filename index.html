@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>월드컵 스코어 맞추기 풀 · 한국 vs 멕시코</title>
+<title>월드컵 스코어 맞추기 풀</title>
 
 <!--
 ====================================================================
@@ -183,11 +183,20 @@ function App() {
   const [selHome, setSelHome] = useState(0);
   const [selAway, setSelAway] = useState(2);
   const [selKick, setSelKick] = useState("");
+  const [selRoom, setSelRoom] = useState("");
 
   useEffect(() => {
     const iv = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(iv);
   }, []);
+
+  useEffect(() => {
+    try {
+      document.title = match
+        ? `${match.roomName ? match.roomName + " · " : ""}${match.home.name} vs ${match.away.name}`
+        : "월드컵 스코어 맞추기 풀";
+    } catch (_) {}
+  }, [match]);
 
   function flashMsg(m) { setFlash(m); setTimeout(() => setFlash(null), 3000); }
 
@@ -299,6 +308,7 @@ function App() {
     const g = GROUPS[selGroup];
     const m = {
       group: selGroup,
+      roomName: (selRoom || "").trim(),
       home: { name: g[selHome][0], flag: g[selHome][1] },
       away: { name: g[selAway][0], flag: g[selAway][1] },
       kickoff: kickMs,
@@ -381,6 +391,7 @@ function App() {
       <div style={S.shell}>
         <header style={S.board}>
           <div style={S.boardGlow} aria-hidden></div>
+          {match && match.roomName ? <div style={S.roomName}>🏟️ {match.roomName}</div> : null}
           <div style={S.eyebrow}>2026 월드컵 · {match ? `${match.group}조` : "스코어 맞추기"} · 스코어 맞추기 풀</div>
           <div style={S.matchup}>
             <Team flag={match ? match.home.flag : "🏳️"} name={match ? match.home.name : "팀 미정"} color={C.kr} side="left" />
@@ -490,7 +501,7 @@ function App() {
 
         <section style={S.card}>
           <div style={S.cardTitle}><span style={S.titleNo}>03</span> 스코어별 베팅 현황</div>
-          <p style={S.cardHint}>막대는 좌측 한국 · 우측 멕시코 점수를 나타내요.</p>
+          <p style={S.cardHint}>막대는 좌측 {match ? match.home.name : "홈"} · 우측 {match ? match.away.name : "원정"} 점수를 나타내요.</p>
           {loading ? <div style={S.empty}>불러오는 중…</div>
             : rows.length === 0 ? <div style={S.empty}>아직 베팅이 없어요. 첫 스코어를 걸어 보세요.</div>
             : (
@@ -579,6 +590,8 @@ function App() {
                     <div style={S.adminSection}>
                       <div style={S.adminH}>② 경기 설정</div>
                       <p style={S.cardHint}>조 → 두 팀 → 킥오프 시간을 정하고 시작하면 베팅이 열려요.</p>
+                      <label style={S.fieldLabel}>방 이름 (참가자에게 보여요)</label>
+                      <input style={S.select} placeholder="예: 우리팀 월드컵 내기방" value={selRoom} onChange={(e) => setSelRoom(e.target.value)} maxLength={30} />
                       <label style={S.fieldLabel}>조 선택</label>
                       <select style={S.select} value={selGroup}
                         onChange={(e) => { setSelGroup(e.target.value); setSelHome(0); setSelAway(2); }}>
@@ -617,7 +630,7 @@ function App() {
                         <button style={S.adminPrimary} onClick={() => setLockState("open")} disabled={busy || !!result}>베팅 열기/재개</button>
                         <button style={S.adminDanger} onClick={() => setLockState("closed")} disabled={busy || !!result}>베팅 마감</button>
                         <button style={S.adminGhost} onClick={() => setLockState("auto")} disabled={busy || !!result}>자동(킥오프 기준)</button>
-                        <button style={S.adminGhost} onClick={() => { setSetupMode(true); setError(""); }} disabled={busy}>새 경기 설정</button>
+                        <button style={S.adminGhost} onClick={() => { setSetupMode(true); setSelRoom(match ? (match.roomName || "") : ""); setError(""); }} disabled={busy}>새 경기 설정</button>
                       </div>
                     </div>
                   )}
@@ -793,6 +806,7 @@ const S = {
   board: { position: "relative", overflow: "hidden", background: `linear-gradient(180deg, ${C.panel}, ${C.panel2})`, border: `1px solid ${C.line}`, borderRadius: 20, padding: "22px 18px 20px" },
   boardGlow: { position: "absolute", top: -120, left: "50%", transform: "translateX(-50%)", width: 320, height: 220, background: `radial-gradient(closest-side, ${C.gold}22, transparent)`, pointerEvents: "none" },
   eyebrow: { textAlign: "center", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: C.muted, fontWeight: 700 },
+  roomName: { textAlign: "center", fontSize: 18, fontWeight: 800, color: C.gold, marginBottom: 6, letterSpacing: -0.3 },
   matchup: { display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 8, margin: "16px 0 18px" },
   team: { display: "flex", flexDirection: "column", gap: 6 },
   flag: { fontSize: 46, lineHeight: 1, filter: "drop-shadow(0 4px 10px rgba(0,0,0,.5))" },
